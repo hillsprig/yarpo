@@ -1,8 +1,10 @@
 #!/usr/bin/env python3
 
 from xml.etree import ElementTree
-import sys, shlex, subprocess, argparse
+import sys, shlex, subprocess, argparse, os
 from collections import namedtuple
+from urllib.parse import urlsplit, urlunsplit
+from pathlib import PurePath
 
 parser = argparse.ArgumentParser(description='Light-weight google repo alternative.')
 
@@ -24,8 +26,19 @@ m_remote = Remote('', '', '', '')
 m_default = Default('', '')
 m_projects = []
 
+manifest_root = ''
+
 def parse_manifest():
-    tree = ElementTree.parse('.manifest/default.xml')
+    global manifest_root
+
+    manifest_search_path = PurePath(os.getcwd())
+
+    while not os.path.exists(str(manifest_search_path) + '/.manifest'):
+        manifest_search_path = PurePath(manifest_search_path.parent)
+
+    manifest_root = str(manifest_search_path)
+
+    tree = ElementTree.parse(manifest_root + '/.manifest/default.xml')
     root = tree.getroot()
 
     global m_remote
@@ -40,35 +53,118 @@ def parse_manifest():
         if child.tag == 'project':
             m_projects.append(Project(name=child.get('name'), path=child.get('path'), remote=child.get('remote'), revision=child.get('revision')))
 
+def get_remote(url):
+    if url:
+        raw_remote = url
+    ## remote.fetch = '..' denotes that the cmd args url should be used
+    elif m_remote.fetch and m_remote.fetch != '..':
+        raw_remote = m_remote.fetch
+    else:
+        if args.url:
+            raw_remote = args.url
+        else:
+            sys.exit(1)
+
+    remote_split = urlsplit(raw_remote)
+    remote = urlunsplit((remote_split.scheme, remote_split.netloc, '', '', ''))
+
+    return remote
+
+# init
 if args.init and args.url:
     branch = '--branch ' + args.branch + ' ' if args.branch else ''
     manifest_clone_cmd = 'git clone ' + branch + args.url + ' .manifest'
 
-    subprocess.call(shlex.split(manifest_clone_cmd), stdout=subprocess.PIPE)
+    subprocess.call(shlex.split(manifest_clone_cmd))
 
     parse_manifest()
 
+    default_remote = get_remote(None)
+
     for project in m_projects:
-        branch = '--branch ' + (project.revision if project.revision else m_default.revision) + ' ' if project.revision or m_default.revision else ''
+        if project.revision or m_default.revision:
+            revision = project.revision if project.revision else m_default.revision
+        else:
+            revision = 'master'
 
-        # Replace with more readable regex
-        remote = args.url[:[index for index, char in enumerate(args.url) if char == '/'][2]] + '/' + project.name
+        if project.remote:
+            remote = get_remote(project.remote)
+        else:
+            remote = default_remote
 
-        path = project.path if project.path else ''
-        clone_cmd = 'git clone ' + branch + remote + ' ' + path 
-        subprocess.call(shlex.split(clone_cmd), stdout=subprocess.PIPE)
+        remote = remote + '/' + project.name + ' '
+
+        path = project.path if project.path else os.path.basename(project.name)
+        git_prefix = 'git -C ' + path + ' '
+
+        # the reason for command list is to more reliably handle revisions regardless of type commit id, tag or branch
+        cmd_list = ['mkdir -p ' + path]
+        cmd_list.append(git_prefix + 'init')
+        cmd_list.append(git_prefix + 'remote add origin ' + remote)
+        cmd_list.append(git_prefix + 'fetch --all')
+        cmd_list.append(git_prefix + 'checkout ' + revision)
+
+        for cmd in cmd_list:
+            subprocess.call(shlex.split(cmd))
 
     sys.exit(0)
 
+
+# status
 if args.status:
-    pass
+    parse_manifest()
 
+    cmd = 'git -C ' + manifest_root + '/.manifest status --short -b'
+    print('project .manifest')
+    subprocess.call(shlex.split(cmd))
+    print('')
+
+    git_prefix = 'git -C ' + manifest_root + '/'
+
+    for project in m_projects:
+        print('project ' + project.name)
+        path = project.path if project.path else os.path.basename(project.name)
+        cmd = git_prefix + path + ' status --short -b'
+        subprocess.call(shlex.split(cmd))
+        print('')
+
+    sys.exit(0)
+
+# sync
 if args.sync:
-    pass
+    parse_manifest()
 
+    git_prefix = 'git -C ' + manifest_root + '/'
+
+    for project in m_projects:
+        print('project ' + project.name)
+        path = project.path if project.path else os.path.basename(project.name)
+        cmd = git_prefix + path + ' pull --ff-only'
+        subprocess.call(shlex.split(cmd))
+        print('')
+
+    sys.exit(0)
+
+# forall
 if args.forall:
-    pass
+    parse_manifest()
 
+    git_prefix = 'git -C ' + manifest_root + '/'
+
+    for project in m_projects:
+        print('project ' + project.name)
+        path = project.path if project.path else os.path.basename(project.name)
+        # split removes the leading 'git ', could be improved
+        cmd = git_prefix + path + ' ' + ''.join(args.forall[1:])
+        subprocess.call(shlex.split(cmd))
+        print('')
+
+    sys.exit(0)
+
+# manifest
 if args.manifest:
-    pass
+    parse_manifest()
 
+    print("Not yet implemented.")
+
+    sys.exit(0)
