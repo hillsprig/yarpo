@@ -70,6 +70,21 @@ def get_remote(url):
 
     return remote
 
+def git_cmd_get(path, cmd):
+    global manifest_root
+    cmds = ['git', '-C', manifest_root + '/' + path]
+    cmds.extend(shlex.split(cmd))
+    process = subprocess.Popen(cmds, stdout=subprocess.PIPE)
+    out, err = process.communicate()
+    return out.decode('utf-8').rstrip()
+
+def git_cmd(path, cmd):
+    global mainfest_root
+    cmds = ['git', '-C', manifest_root + '/' + path]
+    cmds.extend(shlex.split(cmd))
+    print(' '.join(cmds))
+    subprocess.call(cmds)
+
 # init
 if args.init and args.url:
     branch = '--branch ' + args.branch + ' ' if args.branch else ''
@@ -114,18 +129,14 @@ if args.init and args.url:
 if args.status:
     parse_manifest()
 
-    cmd = 'git -C ' + manifest_root + '/.manifest status --short -b'
     print('project .manifest')
-    subprocess.call(shlex.split(cmd))
+    git_cmd('.manifest', 'status --short -b')
     print('')
-
-    git_prefix = 'git -C ' + manifest_root + '/'
 
     for project in m_projects:
         print('project ' + project.name)
         path = project.path if project.path else os.path.basename(project.name)
-        cmd = git_prefix + path + ' status --short -b'
-        subprocess.call(shlex.split(cmd))
+        git_cmd(path, ' status --short -b')
         print('')
 
     sys.exit(0)
@@ -134,13 +145,21 @@ if args.status:
 if args.sync:
     parse_manifest()
 
-    git_prefix = 'git -C ' + manifest_root + '/'
-
     for project in m_projects:
         print('project ' + project.name)
         path = project.path if project.path else os.path.basename(project.name)
-        cmd = git_prefix + path + ' pull --ff-only'
-        subprocess.call(shlex.split(cmd))
+        remote = get_remote(project.remote) + '/' + project.name
+        cur_remote = git_cmd_get(path, 'remote get-url origin')
+        if remote != cur_remote:
+            revision = 'master'
+            if project.revision:
+                revision = project.revision
+            elif m_default.revision:
+                revision = m_default.revision
+            git_cmd(path, 'remote set-url origin ' + remote)
+            git_cmd(path, 'fetch --all')
+            git_cmd(path, 'checkout ' + revision)
+        git_cmd(path, 'pull --ff-only')
         print('')
 
     sys.exit(0)
@@ -149,14 +168,10 @@ if args.sync:
 if args.forall:
     parse_manifest()
 
-    git_prefix = 'git -C ' + manifest_root + '/'
-
     for project in m_projects:
         print('project ' + project.name)
         path = project.path if project.path else os.path.basename(project.name)
-        # split removes the leading 'git ', could be improved
-        cmd = git_prefix + path + ' ' + ''.join(args.forall[1:])
-        subprocess.call(shlex.split(cmd))
+        git_cmd(path, ' '.join(args.forall))
         print('')
 
     sys.exit(0)
