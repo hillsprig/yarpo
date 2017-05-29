@@ -15,6 +15,7 @@ parser.add_argument('--status', action='store_true', help='shows git status of a
 parser.add_argument('--sync', action='store_true', help='updates all repositories that can be fast-forwarded')
 parser.add_argument('--forall', nargs='+', help='executes the given command for all repositories')
 parser.add_argument('--manifest', action='store_true', help='generates a manifest from the current HEADs')
+parser.add_argument('-r', '--reset', action='store_true', dest='reset', help='reset branch to the one in the manifest repository, usable with sync')
 
 args = parser.parse_args()
 
@@ -85,6 +86,15 @@ def git_cmd(path, cmd):
     print(' '.join(cmds))
     subprocess.call(cmds)
 
+def get_revision(project):
+    global m_default
+    revision = 'master'
+    if project.revision:
+        revision = project.revision
+    elif m_default.revision:
+        revision = m_default.revision
+    return revision
+
 # init
 if args.init and args.url:
     branch = '--branch ' + args.branch + ' ' if args.branch else ''
@@ -97,10 +107,6 @@ if args.init and args.url:
     default_remote = get_remote(None)
 
     for project in m_projects:
-        if project.revision or m_default.revision:
-            revision = project.revision if project.revision else m_default.revision
-        else:
-            revision = 'master'
 
         if project.remote:
             remote = get_remote(project.remote)
@@ -117,7 +123,7 @@ if args.init and args.url:
         cmd_list.append(git_prefix + 'init')
         cmd_list.append(git_prefix + 'remote add origin ' + remote)
         cmd_list.append(git_prefix + 'fetch --all')
-        cmd_list.append(git_prefix + 'checkout ' + revision)
+        cmd_list.append(git_prefix + 'checkout ' + get_revision(project))
 
         for cmd in cmd_list:
             subprocess.call(shlex.split(cmd))
@@ -148,17 +154,13 @@ if args.sync:
     for project in m_projects:
         print('project ' + project.name)
         path = project.path if project.path else os.path.basename(project.name)
-        remote = get_remote(project.remote) + '/' + project.name
-        cur_remote = git_cmd_get(path, 'remote get-url origin')
-        if remote != cur_remote:
-            revision = 'master'
-            if project.revision:
-                revision = project.revision
-            elif m_default.revision:
-                revision = m_default.revision
-            git_cmd(path, 'remote set-url origin ' + remote)
-            git_cmd(path, 'fetch --all')
-            git_cmd(path, 'checkout ' + revision)
+        if args.reset:
+            remote = get_remote(project.remote) + '/' + project.name
+            cur_remote = git_cmd_get(path, 'remote get-url origin')
+            if remote != cur_remote:
+                git_cmd(path, 'remote set-url origin ' + remote)
+                git_cmd(path, 'fetch --all')
+                git_cmd(path, 'checkout ' + get_revision(project))
         git_cmd(path, 'pull --ff-only')
         print('')
 
