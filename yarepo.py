@@ -15,7 +15,10 @@ parser.add_argument('--status', action='store_true', help='shows git status of a
 parser.add_argument('--sync', action='store_true', help='updates all repositories that can be fast-forwarded')
 parser.add_argument('--forall', nargs='+', help='executes the given command for all repositories')
 parser.add_argument('--manifest', action='store_true', help='generates a manifest from the current HEADs')
-parser.add_argument('-r', '--reset', action='store_true', dest='reset', help='reset branch to the one in the manifest repository, usable with sync')
+parser.add_argument('-r', '--reset', action='store_true', dest='reset', help='reset branch to the one in the manifest repository, usable with --sync and --checkout')
+parser.add_argument('-m', '--use', default='default', type=str, dest='use_manifest', help='name of manifest to use, defaults to default.')
+parser.add_argument('--showall', nargs='+', help='executes the given command for all repositories and list those for which it succeeds')
+parser.add_argument('--checkout', action='store_true', dest='checkout', help='reset branches to the one specified with --use')
 
 args = parser.parse_args()
 
@@ -29,7 +32,7 @@ m_projects = []
 
 manifest_root = ''
 
-def parse_manifest():
+def parse_manifest(manifest_name = 'default'):
     global manifest_root
 
     manifest_search_path = PurePath(os.getcwd())
@@ -39,7 +42,7 @@ def parse_manifest():
 
     manifest_root = str(manifest_search_path)
 
-    tree = ElementTree.parse(manifest_root + '/.manifest/default.xml')
+    tree = ElementTree.parse(manifest_root + '/.manifest/%s.xml' % manifest_name)
     root = tree.getroot()
 
     global m_remote
@@ -77,13 +80,12 @@ def git_cmd_get(path, cmd):
     cmds.extend(shlex.split(cmd))
     process = subprocess.Popen(cmds, stdout=subprocess.PIPE)
     out, err = process.communicate()
-    return out.decode('utf-8').rstrip()
+    return (process.returncode, out.decode('utf-8').rstrip())
 
 def git_cmd(path, cmd):
     global mainfest_root
     cmds = ['git', '-C', manifest_root + '/' + path]
     cmds.extend(shlex.split(cmd))
-    print(' '.join(cmds))
     subprocess.call(cmds)
 
 def get_revision(project):
@@ -102,7 +104,7 @@ if args.init and args.url:
 
     subprocess.call(shlex.split(manifest_clone_cmd))
 
-    parse_manifest()
+    parse_manifest(args.use_manifest)
 
     default_remote = get_remote(None)
 
@@ -133,7 +135,7 @@ if args.init and args.url:
 
 # status
 if args.status:
-    parse_manifest()
+    parse_manifest(args.use_manifest)
 
     print('project .manifest')
     git_cmd('.manifest', 'status --short -b')
@@ -149,26 +151,51 @@ if args.status:
 
 # sync
 if args.sync:
-    parse_manifest()
+    parse_manifest(args.use_manifest)
 
     for project in m_projects:
         print('project ' + project.name)
         path = project.path if project.path else os.path.basename(project.name)
         if args.reset:
             remote = get_remote(project.remote) + '/' + project.name
-            cur_remote = git_cmd_get(path, 'remote get-url origin')
+            (exit_code, cur_remote) = git_cmd_get(path, 'remote get-url origin')
             if remote != cur_remote:
                 git_cmd(path, 'remote set-url origin ' + remote)
                 git_cmd(path, 'fetch --all')
-                git_cmd(path, 'checkout ' + get_revision(project))
+            # todo: fix so this also works with detached heads...
+            (exit_code, branches) = git_cmd_get(path, 'branch')
+            cur_branch = ''
+            for line in branches.split('\n'):
+                if line[0] == '*':
+                    cur_branch = line[2:]
+                    break
+            wanted_branch = get_revision(project)
+            if cur_branch != '' and cur_branch != wanted_branch:
+                git_cmd(path, 'checkout ' + wanted_branch)
         git_cmd(path, 'pull --ff-only')
         print('')
 
     sys.exit(0)
 
+if args.checkout:
+    parse_manifest(args.use_manifest)
+    for project in m_projects:
+        print('project ' + project.name)
+        path = project.path if project.path else os.path.basename(project.name)
+        # todo: fix so this also works with detached heads...
+        (exit_code, branches) = git_cmd_get(path, 'branch')
+        cur_branch = ''
+        for line in branches.split('\n'):
+            if line[0] == '*':
+                cur_branch = line[2:]
+                break
+        wanted_branch = get_revision(project)
+        if cur_branch != '' and cur_branch != wanted_branch:
+            git_cmd(path, 'checkout ' + wanted_branch)
+
 # forall
 if args.forall:
-    parse_manifest()
+    parse_manifest(args.use_manifest)
 
     for project in m_projects:
         print('project ' + project.name)
@@ -178,9 +205,20 @@ if args.forall:
 
     sys.exit(0)
 
+if args.showall:
+    parse_manifest(args.use_manifest)
+
+    for project in m_projects:
+        path = project.path if project.path else os.path.basename(project.name)
+        (exit_code, out) = git_cmd_get(path, ' '.join(args.showall))
+        if exit_code == 0:
+            print('project ' + project.name)
+
+    sys.exit(0)
+
 # manifest
 if args.manifest:
-    parse_manifest()
+    parse_manifest(args.use_manifest)
 
     print("Not yet implemented.")
 
