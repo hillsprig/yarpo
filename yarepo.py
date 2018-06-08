@@ -97,6 +97,38 @@ def get_revision(project):
         revision = m_default.revision
     return revision
 
+def get_current_branch(project):
+    # todo: fix so this also works with detached heads...
+    path = project.path if project.path else os.path.basename(project.name)
+    (exit_code, branches) = git_cmd_get(path, 'branch')
+    cur_branch = ''
+    for line in branches.split('\n'):
+        if line[0] == '*':
+            cur_branch = line[2:]
+            break
+    return cur_branch
+
+def clone_project(project):
+    if project.remote:
+        remote = get_remote(project.remote)
+    else:
+        remote = get_remote(None)
+
+    remote = remote + '/' + project.name + ' '
+
+    path = project.path if project.path else os.path.basename(project.name)
+    git_prefix = 'git -C ' + path + ' '
+
+    # the reason for command list is to more reliably handle revisions regardless of type commit id, tag or branch
+    cmd_list = ['mkdir -p ' + path]
+    cmd_list.append(git_prefix + 'init')
+    cmd_list.append(git_prefix + 'remote add origin ' + remote)
+    cmd_list.append(git_prefix + 'fetch --all')
+    cmd_list.append(git_prefix + 'checkout ' + get_revision(project))
+
+    for cmd in cmd_list:
+        subprocess.call(shlex.split(cmd))
+
 # init
 if args.init and args.url:
     branch = '--branch ' + args.branch + ' ' if args.branch else ''
@@ -106,29 +138,8 @@ if args.init and args.url:
 
     parse_manifest(args.use_manifest)
 
-    default_remote = get_remote(None)
-
     for project in m_projects:
-
-        if project.remote:
-            remote = get_remote(project.remote)
-        else:
-            remote = default_remote
-
-        remote = remote + '/' + project.name + ' '
-
-        path = project.path if project.path else os.path.basename(project.name)
-        git_prefix = 'git -C ' + path + ' '
-
-        # the reason for command list is to more reliably handle revisions regardless of type commit id, tag or branch
-        cmd_list = ['mkdir -p ' + path]
-        cmd_list.append(git_prefix + 'init')
-        cmd_list.append(git_prefix + 'remote add origin ' + remote)
-        cmd_list.append(git_prefix + 'fetch --all')
-        cmd_list.append(git_prefix + 'checkout ' + get_revision(project))
-
-        for cmd in cmd_list:
-            subprocess.call(shlex.split(cmd))
+        clone_project(project)
 
     sys.exit(0)
 
@@ -156,23 +167,20 @@ if args.sync:
     for project in m_projects:
         print('project ' + project.name)
         path = project.path if project.path else os.path.basename(project.name)
-        if args.reset:
-            remote = get_remote(project.remote) + '/' + project.name
-            (exit_code, cur_remote) = git_cmd_get(path, 'remote get-url origin')
-            if remote != cur_remote:
-                git_cmd(path, 'remote set-url origin ' + remote)
-                git_cmd(path, 'fetch --all')
-            # todo: fix so this also works with detached heads...
-            (exit_code, branches) = git_cmd_get(path, 'branch')
-            cur_branch = ''
-            for line in branches.split('\n'):
-                if line[0] == '*':
-                    cur_branch = line[2:]
-                    break
-            wanted_branch = get_revision(project)
-            if cur_branch != '' and cur_branch != wanted_branch:
-                git_cmd(path, 'checkout ' + wanted_branch)
-        git_cmd(path, 'pull --ff-only')
+        if not os.path.exists(path):
+            clone_project(project)
+        else:
+            if args.reset:
+                remote = get_remote(project.remote) + '/' + project.name
+                (exit_code, cur_remote) = git_cmd_get(path, 'remote get-url origin')
+                if remote != cur_remote:
+                    git_cmd(path, 'remote set-url origin ' + remote)
+                    git_cmd(path, 'fetch --all')
+                cur_branch = get_current_branch(project)
+                wanted_branch = get_revision(project)
+                if cur_branch != '' and cur_branch != wanted_branch:
+                    git_cmd(path, 'checkout ' + wanted_branch)
+            git_cmd(path, 'pull --ff-only')
         print('')
 
     sys.exit(0)
@@ -182,13 +190,7 @@ if args.checkout:
     for project in m_projects:
         print('project ' + project.name)
         path = project.path if project.path else os.path.basename(project.name)
-        # todo: fix so this also works with detached heads...
-        (exit_code, branches) = git_cmd_get(path, 'branch')
-        cur_branch = ''
-        for line in branches.split('\n'):
-            if line[0] == '*':
-                cur_branch = line[2:]
-                break
+        cur_branch = get_current_branch(project)
         wanted_branch = get_revision(project)
         if cur_branch != '' and cur_branch != wanted_branch:
             git_cmd(path, 'checkout ' + wanted_branch)
